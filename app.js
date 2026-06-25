@@ -9,7 +9,7 @@ const firebaseConfig = {
     projectId: "rdchat-f5601",
     storageBucket: "rdchat-f5601.firebasestorage.app",
     messagingSenderId: "110964965807",
-    appId: "1:110964965807:web:814586ed937b974d5daf5a""
+    appId: "1:110964965807:web:814586ed937b974d5daf5a"
 };
 
 const app = initializeApp(firebaseConfig);
