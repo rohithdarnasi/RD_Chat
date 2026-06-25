@@ -12,7 +12,6 @@ const firebaseConfig = {
     appId: "1:110964965807:web:814586ed937b974d5daf5a"
 };
 
-
 const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
 const auth = getAuth(app);
@@ -137,6 +136,7 @@ async function initializeChatRoom(roomId, roomSecret) {
         }
     } catch (e) {
         alert("Connection Blocked: Access Denied to this Node.");
+        console.error(e);
         return goHome();
     }
 
