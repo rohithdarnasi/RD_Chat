@@ -56,7 +56,7 @@
             </div>
         </div>
 
-        <div id="messages-container" class="flex-1 bg-slate-900/30 border border-slate-800/60 rounded-2xl p-4 overflow-y-auto space-y-4 flex flex-col"></div>
+        <div id="messages-container" class="flex-1 bg-slate-900/30 border border-slate-800/60 rounded-2xl p-4 overflow-y-auto space-y-4 flex flex-col custom-scrollbar"></div>
 
         <div id="msg-context-menu" class="hidden fixed inset-0 bg-slate-950/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
             <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 w-full max-w-xs space-y-3 shadow-2xl">
@@ -87,6 +87,11 @@
         </div>
     </div>
 
+    <style>
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #334155; border-radius: 10px; }
+    </style>
     <script type="module" src="app.js"></script>
 </body>
 </html>
