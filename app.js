@@ -24,22 +24,17 @@ let currentUserId = null;
 let unsubFirestore = null;
 let selectedMessageId = null;
 
-// DOM Linkages
 const setupScreen = document.getElementById('setup-screen');
 const chatScreen = document.getElementById('chat-screen');
 const messagesContainer = document.getElementById('messages-container');
 const inputMessage = document.getElementById('input-message');
 const timerSelect = document.getElementById('timer-select');
 const inputFile = document.getElementById('input-file');
-const inputNickname = document.getElementById('input-nickname');
 const activeChatsSection = document.getElementById('active-chats-section');
 const activeChatsList = document.getElementById('active-chats-list');
 const contextMenu = document.getElementById('msg-context-menu');
 
-// --- LOCAL STORAGE MANAGER (Tracks max 10 rooms) ---
-function getSavedRooms() {
-    return JSON.parse(localStorage.getItem('rd_active_slots') || '[]');
-}
+function getSavedRooms() { return JSON.parse(localStorage.getItem('rd_active_slots') || '[]'); }
 
 function saveRoomToDashboard(id, secret) {
     let slots = getSavedRooms();
@@ -80,17 +75,11 @@ function renderDashboardList() {
             });
             activeChatsList.appendChild(row);
         });
-    } else {
-        activeChatsSection.classList.add('hidden');
-    }
+    } else activeChatsSection.classList.add('hidden');
 }
 
-// Local blocklist tracking for "Delete for me"
-function getHiddenMessages() {
-    return JSON.parse(localStorage.getItem('rd_hidden_msgs') || '[]');
-}
+function getHiddenMessages() { return JSON.parse(localStorage.getItem('rd_hidden_msgs') || '[]'); }
 
-// --- CRYPTOGRAPHY ENGINE ---
 function generateRandomSecret(length = 16) {
     const array = new Uint8Array(length);
     window.crypto.getRandomValues(array);
@@ -121,35 +110,39 @@ async function decryptData(cipherBase64, ivBase64, key) {
     } catch (e) { return "[Decryption Failed]"; }
 }
 
-// --- MAIN CHAT SESSION ---
 async function initializeChatRoom(roomId, roomSecret) {
-    if (unsubFirestore) unsubFirestore(); // Reset listeners
+    if (unsubFirestore) unsubFirestore(); 
     
     currentRoomId = roomId;
     currentRoomSecret = roomSecret;
     cryptoKey = await deriveKey(roomSecret);
 
     const roomRef = doc(db, "rooms", roomId);
-    const roomSnap = await getDoc(roomRef);
+    try {
+        const roomSnap = await getDoc(roomRef);
 
-    if (!roomSnap.exists()) {
-        if (!saveRoomToDashboard(roomId, roomSecret)) return goHome();
-        await setDoc(roomRef, { participants: [currentUserId], createdAt: Date.now() });
-    } else {
-        const data = roomSnap.data();
-        if (data.participants.length >= 2 && !data.participants.includes(currentUserId)) {
-            alert("This 1-on-1 private node channel is already at full capacity (Max 2 users).");
-            return goHome();
+        if (!roomSnap.exists()) {
+            if (!saveRoomToDashboard(roomId, roomSecret)) return goHome();
+            await setDoc(roomRef, { participants: [currentUserId], createdAt: Date.now() });
+        } else {
+            const data = roomSnap.data();
+            if (data.participants.length >= 2 && !data.participants.includes(currentUserId)) {
+                alert("Connection Blocked: This private channel is currently locked to its original 2 devices.");
+                return goHome();
+            }
+            if (!saveRoomToDashboard(roomId, roomSecret)) return goHome();
+            if (!data.participants.includes(currentUserId)) {
+                await updateDoc(roomRef, { participants: arrayUnion(currentUserId) });
+            }
         }
-        if (!saveRoomToDashboard(roomId, roomSecret)) return goHome();
-        if (!data.participants.includes(currentUserId)) {
-            await updateDoc(roomRef, { participants: arrayUnion(currentUserId) });
-        }
+    } catch (e) {
+        alert("Connection Blocked: Access Denied to this Node.");
+        return goHome();
     }
 
     setupScreen.classList.add('hidden');
     chatScreen.classList.remove('hidden');
-    document.getElementById('room-display-id').textContent = `Node Address: ${roomId}`;
+    document.getElementById('room-display-id').textContent = `Node: ${roomId}`;
 
     const q = query(collection(db, "rooms", roomId, "messages"), orderBy("timestamp", "asc"));
     unsubFirestore = onSnapshot(q, (snapshot) => {
@@ -160,7 +153,7 @@ async function initializeChatRoom(roomId, roomSecret) {
             const data = docSnap.data();
             const docId = docSnap.id;
             
-            if (hiddenList.includes(docId)) return; // Skip if user hid it ("Delete for me")
+            if (hiddenList.includes(docId)) return;
 
             if (data.expiresAt && Date.now() > data.expiresAt) {
                 await deleteDoc(doc(db, "rooms", roomId, "messages", docId));
@@ -168,10 +161,7 @@ async function initializeChatRoom(roomId, roomSecret) {
             }
 
             const messagePayload = await decryptData(data.ciphertext, data.iv, cryptoKey);
-            let parsedPayload = { handle: "Anonymous", msg: messagePayload };
-            try { parsedPayload = JSON.parse(messagePayload); } catch(e){}
-
-            renderMessage(parsedPayload, data, docId);
+            renderMessage(messagePayload, data, docId);
 
             if (data.senderId !== currentUserId && !data.seenBy?.includes(currentUserId)) {
                 await updateDoc(doc(db, "rooms", roomId, "messages", docId), { seenBy: arrayUnion(currentUserId) });
@@ -180,19 +170,20 @@ async function initializeChatRoom(roomId, roomSecret) {
     });
 }
 
-function renderMessage(payload, data, docId) {
+function renderMessage(content, data, docId) {
     const isMe = data.senderId === currentUserId;
     const wrapper = document.createElement('div');
     wrapper.className = `flex flex-col w-full cursor-pointer ${isMe ? 'items-end' : 'items-start'}`;
 
     let innerContent = data.type === 'image' 
-        ? `<img src="${payload.msg}" class="max-w-[200px] rounded-lg mt-1">` 
-        : `<p class="break-all mt-0.5">${payload.msg}</p>`;
+        ? `<img src="${content}" class="max-w-[200px] rounded-lg mt-1">` 
+        : `<p class="break-all mt-0.5">${content}</p>`;
 
     const ticks = isMe ? (data.seenBy?.length > 0 ? `<span class="text-teal-300 ml-1 text-[10px]">✓✓</span>` : `<span class="text-slate-500 ml-1 text-[10px]">✓</span>`) : '';
+    const senderLabel = isMe ? "You" : "Peer";
 
     wrapper.innerHTML = `
-        <div class="text-[10px] text-slate-500 px-1 font-semibold">${payload.handle}</div>
+        <div class="text-[10px] text-slate-500 px-1 font-semibold">${senderLabel}</div>
         <div class="max-w-xs sm:max-w-md px-4 py-2 rounded-2xl text-sm shadow-md transition hover:brightness-110 ${isMe ? 'bg-gradient-to-r from-teal-700 to-teal-600 text-white rounded-tr-none' : 'bg-slate-800 text-slate-100 rounded-tl-none'}">
             ${innerContent}
             <div class="text-right text-[9px] text-slate-400/70 mt-1 select-none">
@@ -213,10 +204,7 @@ function renderMessage(payload, data, docId) {
 async function sendMessage(content, type = 'text') {
     if (!content || !cryptoKey) return;
     
-    const handle = inputNickname.value.trim() || "User_" + currentUserId.substring(0,4);
-    const complexPayload = JSON.stringify({ handle: handle, msg: content });
-    const encrypted = await encryptData(complexPayload, cryptoKey);
-    
+    const encrypted = await encryptData(content, cryptoKey);
     let expiresAt = null;
     const timerVal = timerSelect.value;
     if (timerVal !== 'never') {
@@ -243,7 +231,6 @@ function goHome() {
     renderDashboardList();
 }
 
-// --- ACTIONS & DIALOGS ---
 document.getElementById('chat-form').addEventListener('submit', (e) => {
     e.preventDefault();
     sendMessage(inputMessage.value.trim(), 'text');
@@ -291,14 +278,13 @@ document.getElementById('btn-delete-chat').addEventListener('click', async () =>
     goHome();
 });
 
-// Context Menu Setup
 document.getElementById('btn-cancel-menu').addEventListener('click', () => contextMenu.classList.add('hidden'));
 document.getElementById('btn-delete-me').addEventListener('click', () => {
     const hidden = getHiddenMessages();
     hidden.push(selectedMessageId);
     localStorage.setItem('rd_hidden_msgs', JSON.stringify(hidden));
     contextMenu.classList.add('hidden');
-    initializeChatRoom(currentRoomId, currentRoomSecret); // Re-render local array
+    initializeChatRoom(currentRoomId, currentRoomSecret); 
 });
 document.getElementById('btn-delete-everyone').addEventListener('click', async () => {
     if (selectedMessageId && currentRoomId) {
@@ -307,7 +293,6 @@ document.getElementById('btn-delete-everyone').addEventListener('click', async (
     contextMenu.classList.add('hidden');
 });
 
-// Bootstrapper initialization
 onAuthStateChanged(auth, async (user) => {
     if (user) {
         currentUserId = user.uid;
