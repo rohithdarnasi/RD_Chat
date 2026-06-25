@@ -1,4 +1,3 @@
-# RD_Chat
 
 # RD chat 🔒
 
