@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>RD chat — Advanced E2EE</title>
+    <title>RD chat — Multi-Node E2EE Dashboard</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="icon" href="data:,">
 </head>
@@ -13,7 +13,12 @@
         <div class="max-w-md w-full bg-slate-900/60 backdrop-blur-xl border border-slate-800/80 rounded-3xl p-8 shadow-2xl space-y-6">
             <div class="text-center">
                 <h1 class="text-4xl font-black text-transparent bg-clip-text bg-gradient-to-br from-teal-400 via-emerald-400 to-cyan-500">RD chat</h1>
-                <p class="text-sm text-slate-400 mt-2 font-medium">Encrypted Group Channels (Max 10)</p>
+                <p class="text-sm text-slate-400 mt-2 font-medium">1-on-1 Secure Channels (Max 10 active chats)</p>
+            </div>
+
+            <div class="space-y-2">
+                <label class="text-xs font-bold text-slate-400 uppercase tracking-wider">Your Chat Handle (Nickname)</label>
+                <input id="input-nickname" type="text" placeholder="Enter temporary alias..." class="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-teal-400 text-slate-100">
             </div>
 
             <button id="btn-create-room" class="w-full py-3 px-4 bg-gradient-to-r from-teal-500 to-emerald-500 hover:from-teal-600 text-slate-950 font-bold rounded-xl transition-all shadow-lg">
@@ -30,34 +35,50 @@
                 <input id="input-join-code" type="text" placeholder="Paste Invite Link or Code" required class="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-teal-500 text-slate-100 placeholder-slate-600">
                 <button type="submit" class="bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold px-4 rounded-xl text-sm transition">Join</button>
             </form>
+
+            <div id="active-chats-section" class="pt-4 border-t border-slate-800/60 hidden">
+                <h3 class="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">Active Sessions (<span id="chat-count">0</span>/10)</h3>
+                <div id="active-chats-list" class="space-y-2"></div>
+            </div>
         </div>
     </div>
 
     <div id="chat-screen" class="hidden flex-1 flex flex-col max-w-3xl w-full mx-auto p-4 h-screen max-h-screen">
         
         <div class="bg-slate-900/80 border border-slate-800/80 rounded-2xl p-4 flex justify-between items-center shadow-lg mb-4">
-            <div>
-                <h2 class="font-bold text-sm text-slate-200 flex items-center gap-2">
-                    <span class="h-2 w-2 rounded-full bg-emerald-500 animate-pulse"></span> Group Node
-                </h2>
-                <p id="room-display-id" class="text-[11px] font-mono text-slate-500 mt-0.5"></p>
+            <div class="flex items-center gap-3">
+                <button id="btn-home" class="py-1.5 px-3 bg-slate-800 hover:bg-slate-700 text-xs font-bold rounded-lg border border-slate-700 transition">← Home</button>
+                <div>
+                    <h2 class="font-bold text-sm text-slate-200 flex items-center gap-2">
+                        <span class="h-2 w-2 rounded-full bg-emerald-500 animate-pulse"></span> E2EE Node Channel
+                    </h2>
+                    <p id="room-display-id" class="text-[11px] font-mono text-slate-500 mt-0.5"></p>
+                </div>
             </div>
             <div class="flex gap-2">
                 <button id="btn-copy-link" class="py-1.5 px-3 bg-slate-800 hover:bg-slate-700 text-xs font-semibold rounded-lg border border-slate-700 transition">Copy Link</button>
-                <button id="btn-delete-chat" class="py-1.5 px-3 bg-red-900/30 hover:bg-red-900/60 text-red-400 text-xs font-semibold rounded-lg border border-red-900/50 transition">Delete Chat</button>
+                <button id="btn-delete-chat" class="py-1.5 px-3 bg-red-900/20 hover:bg-red-900/40 text-red-400 text-xs font-semibold rounded-lg border border-red-900/30 transition">Clear Full Node</button>
             </div>
         </div>
 
         <div id="messages-container" class="flex-1 bg-slate-900/30 border border-slate-800/60 rounded-2xl p-4 overflow-y-auto space-y-4 flex flex-col"></div>
 
+        <div id="msg-context-menu" class="hidden fixed inset-0 bg-slate-950/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+            <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 w-full max-w-xs space-y-3 shadow-2xl">
+                <h4 class="text-sm font-bold text-slate-400 text-center mb-2">Manage Message</h4>
+                <button id="btn-delete-me" class="w-full py-2.5 bg-slate-800 hover:bg-slate-700 text-sm font-semibold rounded-xl transition">Delete for Me</button>
+                <button id="btn-delete-everyone" class="w-full py-2.5 bg-red-900/40 hover:bg-red-900/60 text-red-200 text-sm font-semibold rounded-xl transition">Delete for Everyone</button>
+                <button id="btn-cancel-menu" class="w-full py-2 bg-transparent text-slate-500 text-xs font-medium rounded-xl hover:text-slate-400 transition">Cancel</button>
+            </div>
+        </div>
+
         <div class="mt-4 bg-slate-900/80 border border-slate-800/80 rounded-2xl p-3 shadow-xl space-y-3">
             <div class="flex justify-between items-center px-1">
                 <select id="timer-select" class="bg-slate-950 text-xs text-slate-300 border border-slate-800 rounded-lg px-2 py-1 outline-none">
-                    <option value="burn">Burn on Read</option>
-                    <option value="1">1 Hour</option>
-                    <option value="6">6 Hours</option>
-                    <option value="24">24 Hours</option>
-                    <option value="never">Never Delete</option>
+                    <option value="1">Self-Destruct: 1 Hour</option>
+                    <option value="6">Self-Destruct: 6 Hours</option>
+                    <option value="24">Self-Destruct: 24 Hours</option>
+                    <option value="never" selected>Keep Indefinitely</option>
                 </select>
                 <label class="cursor-pointer text-slate-400 hover:text-teal-400 transition">
                     <input type="file" id="input-file" accept="image/*" class="hidden">
@@ -65,7 +86,7 @@
                 </label>
             </div>
             <form id="chat-form" class="flex gap-2">
-                <input id="input-message" type="text" placeholder="Type message..." autocomplete="off" class="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-teal-500 text-slate-100">
+                <input id="input-message" type="text" placeholder="Type encrypted package..." autocomplete="off" class="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-teal-500 text-slate-100">
                 <button type="submit" class="bg-gradient-to-r from-teal-500 to-emerald-500 text-slate-950 font-bold px-6 rounded-xl text-sm transition shadow-md">Send</button>
             </form>
         </div>
