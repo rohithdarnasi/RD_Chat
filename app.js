@@ -19,17 +19,78 @@ const auth = getAuth(app);
 
 let cryptoKey = null;
 let currentRoomId = null;
+let currentRoomSecret = null;
 let currentUserId = null;
+let unsubFirestore = null;
+let selectedMessageId = null;
 
-// DOM Elements
+// DOM Linkages
 const setupScreen = document.getElementById('setup-screen');
 const chatScreen = document.getElementById('chat-screen');
 const messagesContainer = document.getElementById('messages-container');
 const inputMessage = document.getElementById('input-message');
 const timerSelect = document.getElementById('timer-select');
 const inputFile = document.getElementById('input-file');
+const inputNickname = document.getElementById('input-nickname');
+const activeChatsSection = document.getElementById('active-chats-section');
+const activeChatsList = document.getElementById('active-chats-list');
+const contextMenu = document.getElementById('msg-context-menu');
 
-// --- CRYPTO ENGINE ---
+// --- LOCAL STORAGE MANAGER (Tracks max 10 rooms) ---
+function getSavedRooms() {
+    return JSON.parse(localStorage.getItem('rd_active_slots') || '[]');
+}
+
+function saveRoomToDashboard(id, secret) {
+    let slots = getSavedRooms();
+    if (slots.some(s => s.id === id)) return true;
+    if (slots.length >= 10) {
+        alert("Dashboard full! Please delete an existing room session to track a new one.");
+        return false;
+    }
+    slots.push({ id, secret });
+    localStorage.setItem('rd_active_slots', JSON.stringify(slots));
+    return true;
+}
+
+function renderDashboardList() {
+    const slots = getSavedRooms();
+    document.getElementById('chat-count').textContent = slots.length;
+    if(slots.length > 0) {
+        activeChatsSection.classList.remove('hidden');
+        activeChatsList.innerHTML = '';
+        slots.forEach(slot => {
+            const row = document.createElement('div');
+            row.className = "flex items-center justify-between p-3 bg-slate-950/60 border border-slate-800 rounded-xl hover:border-slate-700 transition";
+            row.innerHTML = `
+                <span class="text-xs font-mono text-slate-300 truncate max-w-[180px]">Node: ${slot.id}</span>
+                <div class="flex gap-1">
+                    <button class="btn-open py-1 px-2.5 bg-teal-500/10 text-teal-400 hover:bg-teal-500/20 text-xs font-semibold rounded-md transition">Open</button>
+                    <button class="btn-forget py-1 px-2.5 text-slate-500 hover:text-red-400 text-xs font-semibold rounded-md transition">✕</button>
+                </div>
+            `;
+            row.querySelector('.btn-open').addEventListener('click', () => {
+                window.location.hash = `${slot.id}:${slot.secret}`;
+                initializeChatRoom(slot.id, slot.secret);
+            });
+            row.querySelector('.btn-forget').addEventListener('click', () => {
+                const filtered = getSavedRooms().filter(s => s.id !== slot.id);
+                localStorage.setItem('rd_active_slots', JSON.stringify(filtered));
+                renderDashboardList();
+            });
+            activeChatsList.appendChild(row);
+        });
+    } else {
+        activeChatsSection.classList.add('hidden');
+    }
+}
+
+// Local blocklist tracking for "Delete for me"
+function getHiddenMessages() {
+    return JSON.parse(localStorage.getItem('rd_hidden_msgs') || '[]');
+}
+
+// --- CRYPTOGRAPHY ENGINE ---
 function generateRandomSecret(length = 16) {
     const array = new Uint8Array(length);
     window.crypto.getRandomValues(array);
@@ -60,83 +121,105 @@ async function decryptData(cipherBase64, ivBase64, key) {
     } catch (e) { return "[Decryption Failed]"; }
 }
 
-// --- CORE APP ---
+// --- MAIN CHAT SESSION ---
 async function initializeChatRoom(roomId, roomSecret) {
+    if (unsubFirestore) unsubFirestore(); // Reset listeners
+    
     currentRoomId = roomId;
+    currentRoomSecret = roomSecret;
     cryptoKey = await deriveKey(roomSecret);
 
     const roomRef = doc(db, "rooms", roomId);
     const roomSnap = await getDoc(roomRef);
 
     if (!roomSnap.exists()) {
+        if (!saveRoomToDashboard(roomId, roomSecret)) return goHome();
         await setDoc(roomRef, { participants: [currentUserId], createdAt: Date.now() });
     } else {
         const data = roomSnap.data();
-        if (data.participants.length < 10 && !data.participants.includes(currentUserId)) {
+        if (data.participants.length >= 2 && !data.participants.includes(currentUserId)) {
+            alert("This 1-on-1 private node channel is already at full capacity (Max 2 users).");
+            return goHome();
+        }
+        if (!saveRoomToDashboard(roomId, roomSecret)) return goHome();
+        if (!data.participants.includes(currentUserId)) {
             await updateDoc(roomRef, { participants: arrayUnion(currentUserId) });
         }
     }
 
     setupScreen.classList.add('hidden');
     chatScreen.classList.remove('hidden');
-    document.getElementById('room-display-id').textContent = `ID: ${roomId}`;
+    document.getElementById('room-display-id').textContent = `Node Address: ${roomId}`;
 
     const q = query(collection(db, "rooms", roomId, "messages"), orderBy("timestamp", "asc"));
-    onSnapshot(q, (snapshot) => {
-        messagesContainer.innerHTML = ''; // Clear and re-render for simplicity in tracking states
+    unsubFirestore = onSnapshot(q, (snapshot) => {
+        messagesContainer.innerHTML = '';
+        const hiddenList = getHiddenMessages();
+
         snapshot.docs.forEach(async (docSnap) => {
             const data = docSnap.data();
             const docId = docSnap.id;
             
-            // Handle Expiry Timers
+            if (hiddenList.includes(docId)) return; // Skip if user hid it ("Delete for me")
+
             if (data.expiresAt && Date.now() > data.expiresAt) {
                 await deleteDoc(doc(db, "rooms", roomId, "messages", docId));
                 return;
             }
 
-            const decryptedContent = await decryptData(data.ciphertext, data.iv, cryptoKey);
-            renderMessage(decryptedContent, data, docId);
+            const messagePayload = await decryptData(data.ciphertext, data.iv, cryptoKey);
+            let parsedPayload = { handle: "Anonymous", msg: messagePayload };
+            try { parsedPayload = JSON.parse(messagePayload); } catch(e){}
 
-            // Handle Read Receipts & Burn on Read
+            renderMessage(parsedPayload, data, docId);
+
             if (data.senderId !== currentUserId && !data.seenBy?.includes(currentUserId)) {
-                if (data.timer === 'burn') {
-                    await deleteDoc(doc(db, "rooms", roomId, "messages", docId));
-                } else {
-                    await updateDoc(doc(db, "rooms", roomId, "messages", docId), { seenBy: arrayUnion(currentUserId) });
-                }
+                await updateDoc(doc(db, "rooms", roomId, "messages", docId), { seenBy: arrayUnion(currentUserId) });
             }
         });
     });
 }
 
-function renderMessage(content, data, docId) {
+function renderMessage(payload, data, docId) {
     const isMe = data.senderId === currentUserId;
     const wrapper = document.createElement('div');
-    wrapper.className = `flex flex-col w-full ${isMe ? 'items-end' : 'items-start'}`;
+    wrapper.className = `flex flex-col w-full cursor-pointer ${isMe ? 'items-end' : 'items-start'}`;
 
     let innerContent = data.type === 'image' 
-        ? `<img src="${content}" class="max-w-[200px] rounded-lg">` 
-        : content;
+        ? `<img src="${payload.msg}" class="max-w-[200px] rounded-lg mt-1">` 
+        : `<p class="break-all mt-0.5">${payload.msg}</p>`;
 
-    // Tick marks logic (✓ = sent, ✓✓ = seen by at least 1 person)
-    const ticks = isMe ? (data.seenBy?.length > 0 ? `<span class="text-blue-400 ml-2 text-xs">✓✓</span>` : `<span class="text-slate-400 ml-2 text-xs">✓</span>`) : '';
+    const ticks = isMe ? (data.seenBy?.length > 0 ? `<span class="text-teal-300 ml-1 text-[10px]">✓✓</span>` : `<span class="text-slate-500 ml-1 text-[10px]">✓</span>`) : '';
 
     wrapper.innerHTML = `
-        <div class="max-w-xs sm:max-w-md px-4 py-2 rounded-2xl text-sm ${isMe ? 'bg-teal-600 text-white rounded-tr-none' : 'bg-slate-800 text-slate-100 rounded-tl-none'}">
-            ${innerContent} ${ticks}
+        <div class="text-[10px] text-slate-500 px-1 font-semibold">${payload.handle}</div>
+        <div class="max-w-xs sm:max-w-md px-4 py-2 rounded-2xl text-sm shadow-md transition hover:brightness-110 ${isMe ? 'bg-gradient-to-r from-teal-700 to-teal-600 text-white rounded-tr-none' : 'bg-slate-800 text-slate-100 rounded-tl-none'}">
+            ${innerContent}
+            <div class="text-right text-[9px] text-slate-400/70 mt-1 select-none">
+                ${new Date(data.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})} ${ticks}
+            </div>
         </div>
     `;
+
+    wrapper.addEventListener('click', () => {
+        selectedMessageId = docId;
+        contextMenu.classList.remove('hidden');
+    });
+
     messagesContainer.appendChild(wrapper);
     messagesContainer.scrollTop = messagesContainer.scrollHeight;
 }
 
 async function sendMessage(content, type = 'text') {
     if (!content || !cryptoKey) return;
-    const encrypted = await encryptData(content, cryptoKey);
+    
+    const handle = inputNickname.value.trim() || "User_" + currentUserId.substring(0,4);
+    const complexPayload = JSON.stringify({ handle: handle, msg: content });
+    const encrypted = await encryptData(complexPayload, cryptoKey);
     
     let expiresAt = null;
     const timerVal = timerSelect.value;
-    if (timerVal !== 'burn' && timerVal !== 'never') {
+    if (timerVal !== 'never') {
         expiresAt = Date.now() + (parseInt(timerVal) * 60 * 60 * 1000);
     }
 
@@ -145,13 +228,22 @@ async function sendMessage(content, type = 'text') {
         senderId: currentUserId,
         timestamp: Date.now(),
         type: type,
-        timer: timerVal,
         expiresAt: expiresAt,
         seenBy: []
     });
 }
 
-// --- EVENT LISTENERS ---
+function goHome() {
+    if (unsubFirestore) unsubFirestore();
+    currentRoomId = null;
+    cryptoKey = null;
+    window.location.hash = '';
+    chatScreen.classList.add('hidden');
+    setupScreen.classList.remove('hidden');
+    renderDashboardList();
+}
+
+// --- ACTIONS & DIALOGS ---
 document.getElementById('chat-form').addEventListener('submit', (e) => {
     e.preventDefault();
     sendMessage(inputMessage.value.trim(), 'text');
@@ -160,46 +252,66 @@ document.getElementById('chat-form').addEventListener('submit', (e) => {
 
 inputFile.addEventListener('change', (e) => {
     const file = e.target.files[0];
-    if (file && file.size < 500000) { // Limit to 500kb to prevent DB crash
+    if (file && file.size < 500000) {
         const reader = new FileReader();
         reader.onload = (e) => sendMessage(e.target.result, 'image');
         reader.readAsDataURL(file);
-    } else {
-        alert("Image too large. Must be under 500KB.");
-    }
+    } else alert("Image size must remain underneath 500KB.");
 });
 
 document.getElementById('btn-create-room').addEventListener('click', () => {
-    const link = `${Math.random().toString(36).substring(2, 10)}:${generateRandomSecret(16)}`;
-    window.location.hash = link;
-    initializeChatRoom(...link.split(':'));
+    const uniqueRoom = Math.random().toString(36).substring(2, 10);
+    const cryptoSecret = generateRandomSecret(16);
+    const deepLink = `${uniqueRoom}:${cryptoSecret}`;
+    window.location.hash = deepLink;
+    initializeChatRoom(uniqueRoom, cryptoSecret);
 });
 
 document.getElementById('join-form').addEventListener('submit', (e) => {
     e.preventDefault();
     let code = document.getElementById('input-join-code').value.trim();
-    if (code.includes('#')) code = code.split('#')[1]; // Allow pasting full URLs
+    if (code.includes('#')) code = code.split('#')[1];
     if (code.includes(':')) {
         window.location.hash = code;
         initializeChatRoom(...code.split(':'));
-    } else alert("Invalid Invite Code format.");
+    } else alert("Bad invite block construction.");
 });
 
+document.getElementById('btn-home').addEventListener('click', goHome);
 document.getElementById('btn-copy-link').addEventListener('click', () => navigator.clipboard.writeText(window.location.href));
 
 document.getElementById('btn-delete-chat').addEventListener('click', async () => {
-    if(!confirm("Destroy this room for everyone?")) return;
+    if(!confirm("Wipe this entire chat node? This completely disconnects both endpoints.")) return;
     const msgs = await getDocs(collection(db, "rooms", currentRoomId, "messages"));
     msgs.forEach(d => deleteDoc(d.ref));
     await deleteDoc(doc(db, "rooms", currentRoomId));
-    window.location.hash = '';
-    window.location.reload();
+    
+    const remaining = getSavedRooms().filter(s => s.id !== currentRoomId);
+    localStorage.setItem('rd_active_slots', JSON.stringify(remaining));
+    goHome();
 });
 
-// Bootstrapper
+// Context Menu Setup
+document.getElementById('btn-cancel-menu').addEventListener('click', () => contextMenu.classList.add('hidden'));
+document.getElementById('btn-delete-me').addEventListener('click', () => {
+    const hidden = getHiddenMessages();
+    hidden.push(selectedMessageId);
+    localStorage.setItem('rd_hidden_msgs', JSON.stringify(hidden));
+    contextMenu.classList.add('hidden');
+    initializeChatRoom(currentRoomId, currentRoomSecret); // Re-render local array
+});
+document.getElementById('btn-delete-everyone').addEventListener('click', async () => {
+    if (selectedMessageId && currentRoomId) {
+        await deleteDoc(doc(db, "rooms", currentRoomId, "messages", selectedMessageId));
+    }
+    contextMenu.classList.add('hidden');
+});
+
+// Bootstrapper initialization
 onAuthStateChanged(auth, async (user) => {
     if (user) {
         currentUserId = user.uid;
+        renderDashboardList();
         const hash = window.location.hash.substring(1);
         if (hash.includes(':')) initializeChatRoom(...hash.split(':'));
     } else await signInAnonymously(auth);
